@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Bitcoin Blockchain — realtime visualization</title>
+<style>
+  :root { --bg:#05070c; --fg:#c9d4e0; --dim:#5a6a80; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; background:var(--bg); color:var(--fg);
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif; overflow:hidden; }
+  #stage { position:fixed; inset:0; }
+  canvas { display:block; width:100%; height:100%; }
+
+  /* Legend (top-left) */
+  #legend { position:fixed; left:22px; top:70px; font-size:11px; line-height:1.15;
+    color:var(--fg); user-select:none; }
+  #legend h4 { font-size:11px; letter-spacing:.5px; color:var(--dim); margin-bottom:5px; font-weight:600; }
+  #legend table { border-collapse:collapse; }
+  #legend td { padding:1px 6px 1px 0; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  #legend .sw { width:12px; height:12px; display:inline-block; vertical-align:-2px; }
+  #legend .btc { color:#8fa0b5; text-align:right; }
+  #legend .usd { color:#8fa0b5; text-align:right; padding-right:8px; }
+
+  /* Ticker (bottom-left) */
+  #ticker { position:fixed; left:22px; bottom:16px; font-family:"Consolas","Courier New",monospace;
+    font-size:11px; color:#9fb0c4; user-select:none; text-shadow:0 0 6px #000; }
+  #ticker h4 { font-size:11px; color:var(--dim); margin-bottom:4px; font-weight:600;
+    font-family:"Segoe UI",sans-serif; letter-spacing:.5px; }
+  #ticker .row { white-space:nowrap; opacity:.92; }
+  #ticker .row .g { color:#63f08a; }
+  #ticker .row .v { color:#dfe6ea; }
+  #ticker .row .arr { color:#4a5a70; }
+
+  /* Status pill (top-right) */
+  #status { position:fixed; right:20px; top:18px; font-size:11px; letter-spacing:.6px;
+    display:flex; align-items:center; gap:8px; user-select:none; }
+  #status .dot { width:9px; height:9px; border-radius:50%; background:#f0a030; box-shadow:0 0 8px #f0a030; }
+  #status.live .dot { background:#33e07a; box-shadow:0 0 9px #33e07a; }
+  #status .lbl { color:#9fb0c4; }
+  #sig { position:fixed; right:20px; bottom:14px; font-size:10px; color:#3a4658;
+    font-family:"Consolas",monospace; user-select:none; }
+  #hint { position:fixed; right:20px; top:40px; font-size:10px; color:#4a5a70; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c"></canvas></div>
+
+<div id="legend">
+  <table>
+    <tr><td class="btc" style="color:var(--dim)">BTC</td><td class="usd" style="color:var(--dim)">USD</td><td></td></tr>
+  </table>
+</div>
+
+<div id="status"><span class="dot"></span><span class="lbl">CONNECTING…</span></div>
+<div id="hint">block time: real blocks scroll the wall</div>
+
+<div id="ticker">
+  <h4>New transactions</h4>
+  <div id="tickrows"></div>
+</div>
+<div id="sig">rebuilt homage to visualblockchain.org · steve@visualblockchain.org</div>
+
+<script>
+"use strict";
+/* ============================================================
+   The Bitcoin Blockchain — realtime coin-flow wall
+   A single-file homage to visualblockchain.org (Steve, ~2018).
+   Live data: blockchain.info WebSocket. Falls back to simulation.
+   ============================================================ */
+
+// ---- config -------------------------------------------------
+const COLS = 46;          // time columns (blocks). newest at right/front.
+const ROWS = 15;          // address-space rows.
+let   PRICE = 65000;      // BTC/USD, refreshed if reachable.
+
+// ---- state --------------------------------------------------
+// each cell: { usd:Number, hot:0..1 } ; column = array of ROWS cells
+function makeCol(){ return Array.from({length:ROWS}, ()=>({usd:0, hot:0})); }
+let columns = Array.from({length:COLS}, makeCol);
+let live = columns[COLS-1];          // the front "pending block" being built
+let scroll = 0;                      // 0..1 slide animation progress
+const flows = [];                    // active green coin-age lines
+const tickRows = [];                 // recent tx text
+let txCount = 0, blockCount = 0;
+
+// ---- color ramp (USD, log scale) ---------------------------
+const STOPS = [
+  [10,        [ 10, 24, 60]],
+  [100,       [ 18, 52,122]],
+  [1000,      [ 31, 95,208]],
+  [10000,     [ 74,144,226]],
+  [100000,    [150,178,200]],
+  [1000000,   [223,230,234]],
+  [10000000,  [240,160, 48]],
+  [100000000, [240, 96, 16]],
+  [1000000000,[224, 24, 16]],
+];
+function ramp(usd){
+  if(usd<=STOPS[0][0]) return STOPS[0][1];
+  const L = Math.log10(usd);
+  for(let i=0;i<STOPS.length-1;i++){
+    const a=STOPS[i], b=STOPS[i+1];
+    const la=Math.log10(a[0]), lb=Math.log10(b[0]);
+    if(L<=lb){
+      const t=(L-la)/(lb-la);
+      return [
+        Math.round(a[1][0]+(b[1][0]-a[1][0])*t),
+        Math.round(a[1][1]+(b[1][1]-a[1][1])*t),
+        Math.round(a[1][2]+(b[1][2]-a[1][2])*t),
+      ];
+    }
+  }
+  return STOPS[STOPS.length-1][1];
+}
+
+// ---- legend build ------------------------------------------
+(function buildLegend(){
+  const rows = [
+    ["100,000","$1 Billion",1e9],
+    ["10,000", "$100 Million",1e8],
+    ["1,000",  "$10 Million",1e7],
+    ["100",    "$1 Million",1e6],
+    ["10",     "$100,000",1e5],
+    ["1",      "$10,000",1e4],
+    ["0.1",    "$1,000",1e3],
+    ["0.01",   "$100",1e2],
+    ["0.001",  "$10",1e1],
+  ];
+  const t = document.querySelector("#legend table");
+  for(const [btc,usd,v] of rows){
+    const c = ramp(v);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="btc">${btc}</td><td class="usd">${usd}</td>`+
+      `<td><span class="sw" style="background:rgb(${c[0]},${c[1]},${c[2]})"></span></td>`;
+    t.appendChild(tr);
+  }
+})();
+
+// ---- geometry (one-point funnel perspective) ---------------
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let W=0,H=0,VPx=0,VPy=0,RIGHT=0,CH=0;
+function resize(){
+  const dpr = window.devicePixelRatio||1;
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = Math.round(W*dpr); canvas.height = Math.round(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  VPx = W*0.045; VPy = H*0.44; RIGHT = W*0.855; CH = H*0.046;
+}
+window.addEventListener("resize", resize); resize();
+
+const PX = 1.65, PS = 1.30, SMIN = 0.14;
+function colX(c){ const d=c/(COLS-1); return VPx + (RIGHT-VPx)*Math.pow(d,PX); }
+function colScale(c){ const d=c/(COLS-1); return SMIN + (1-SMIN)*Math.pow(d,PS); }
+function cellY(c,r){ return VPy + (r - ROWS/2)*CH*colScale(c); }
+// center point of a cell (for flow lines) using virtual column index (float ok via clamp)
+function cellCenter(c,r){
+  const ci=Math.max(0,Math.min(COLS-2,c));
+  const x=(colX(ci)+colX(ci+1))/2;
+  const y=(cellY(ci,r)+cellY(ci,r+1))/2;
+  return [x,y];
+}
+
+// ---- render -------------------------------------------------
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // subtle vertical gradient backdrop
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,"#070a11"); bg.addColorStop(1,"#04060a");
+  ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+  const off = -scroll; // slide fraction toward VP while a new block eases in
+  // draw columns back -> front so front overlaps
+  for(let c=0;c<COLS-1;c++){
+    const col = columns[c];
+    const nextCol = columns[c+1];
+    const xL=colX(c+off), xR=colX(c+1+off);
+    for(let r=0;r<ROWS;r++){
+      const cell = col[r];
+      const yTL=cellY(c+off,r),   yBL=cellY(c+off,r+1);
+      const yTR=cellY(c+1+off,r), yBR=cellY(c+1+off,r+1);
+      // base fill
+      let col3, alpha=1;
+      if(cell.usd>0){
+        col3 = ramp(cell.usd);
+      } else {
+        const g = 18 + Math.round(10*(c/COLS)); col3=[g,g+3,g+8];
+      }
+      ctx.beginPath();
+      ctx.moveTo(xL,yTL); ctx.lineTo(xR,yTR); ctx.lineTo(xR,yBR); ctx.lineTo(xL,yBL);
+      ctx.closePath();
+      ctx.fillStyle=`rgb(${col3[0]},${col3[1]},${col3[2]})`;
+      ctx.fill();
+      // hot glow (freshly landed tx)
+      if(cell.hot>0.01){
+        ctx.fillStyle=`rgba(99,240,138,${0.55*cell.hot})`;
+        ctx.fill();
+        cell.hot*=0.94;
+      }
+      // gridline
+      ctx.strokeStyle="rgba(0,0,0,0.35)"; ctx.lineWidth=0.6; ctx.stroke();
+    }
+  }
+
+  // ---- green coin-age flow lines ----
+  for(let i=flows.length-1;i>=0;i--){
+    const f=flows[i];
+    const [x1,y1]=cellCenter(f.c1+off,f.r1);
+    const [x2,y2]=cellCenter(f.c2+off,f.r2);
+    ctx.strokeStyle=`rgba(120,255,160,${0.75*f.a})`;
+    ctx.lineWidth=1.4; ctx.shadowColor="rgba(99,240,138,0.9)"; ctx.shadowBlur=8;
+    ctx.beginPath(); ctx.moveTo(x1,y1);
+    const mx=(x1+x2)/2, my=Math.min(y1,y2)-30;
+    ctx.quadraticCurveTo(mx,my,x2,y2); ctx.stroke();
+    ctx.shadowBlur=0;
+    // node dots
+    ctx.fillStyle=`rgba(160,255,190,${f.a})`;
+    ctx.beginPath(); ctx.arc(x2,y2,2.6,0,7); ctx.fill();
+    f.a*=0.965;
+    if(f.a<0.03) flows.splice(i,1);
+  }
+
+  drawLabels(off);
+}
+
+function drawLabels(off){
+  ctx.save();
+  ctx.textBaseline="middle";
+  // Address Space (right, following front column top->bottom)
+  ctx.fillStyle="#6d7f95"; ctx.font="600 13px 'Segoe UI'";
+  const axc=COLS-1.6+off;
+  const ax = colX(axc)+22;
+  ctx.save();
+  ctx.translate(ax, VPy);
+  ctx.rotate(-0.14);
+  ctx.textAlign="left"; ctx.fillText("Address Space", 6, 0);
+  ctx.restore();
+
+  // Title
+  ctx.fillStyle="rgba(210,222,235,0.92)"; ctx.font="700 26px 'Segoe UI'";
+  ctx.textAlign="left";
+  ctx.save(); ctx.translate(W*0.30, H*0.155); ctx.rotate(-0.075);
+  ctx.fillText("The Bitcoin Blockchain",0,0); ctx.restore();
+
+  // Block Time (bottom)
+  ctx.fillStyle="#6d7f95"; ctx.font="600 13px 'Segoe UI'";
+  ctx.save(); ctx.translate(W*0.30, H*0.90); ctx.rotate(-0.02);
+  ctx.fillText("Block Time",0,0); ctx.restore();
+
+  // time markers along bottom edge
+  const marks=[[0,"2009"],[0.12,"3 years ago"],[0.28,"last year"],[0.42,"6 months"],
+    [0.56,"last month"],[0.68,"last week"],[0.79,"3 days"],[0.88,"12 hours"],
+    [0.95,"an hour ago"],[1,"just now"]];
+  ctx.fillStyle="#586a80"; ctx.font="10px 'Segoe UI'"; ctx.textAlign="center";
+  for(const [d,label] of marks){
+    const c=d*(COLS-1)+off;
+    const x=colX(c); const y=cellY(c,ROWS)+10*colScale(c)+6;
+    if(x<VPx-4||x>RIGHT+40) continue;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(0.02); ctx.fillText(label,0,0); ctx.restore();
+  }
+  ctx.restore();
+}
+
+// ---- data ingestion ----------------------------------------
+function hashStr(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
+function shortAddr(a){ if(!a) return "──────────────"; return a.slice(0,7)+"…"+a.slice(-4); }
+
+function landTx(btc, addrOut, addrIn){
+  const usd = btc*PRICE;
+  const r = hashStr((addrOut||String(txCount))+"") % ROWS;
+  const cell = live[r];
+  cell.usd = Math.max(cell.usd, usd);
+  cell.hot = 1;
+  txCount++;
+
+  // coin-age flow line: from an older column (input's coin age) to this new output
+  if(Math.random()<0.5 && usd>50){
+    const c1 = Math.floor((hashStr((addrIn||"x")+txCount)%COLS)*0.85); // older column
+    const r1 = hashStr((addrIn||"y")+r) % ROWS;
+    flows.push({c1, r1, c2:COLS-1, r2:r, a:1});
+    if(flows.length>14) flows.shift();
+  }
+
+  // ticker
+  const now = new Date();
+  const dstr = now.toISOString().slice(0,10);
+  tickRows.unshift(
+    `<span class="row"><span class="g">${shortAddr(addrIn)}</span> `+
+    `<span class="arr">${dstr} -&gt;</span> `+
+    `<span class="v">${shortAddr(addrOut)}</span>  `+
+    `<span class="v">${btc.toFixed(3)} BTC</span></span>`);
+  if(tickRows.length>6) tickRows.pop();
+  renderTicker();
+}
+
+let tickPending=false;
+function renderTicker(){
+  if(tickPending) return; tickPending=true;
+  requestAnimationFrame(()=>{ document.getElementById("tickrows").innerHTML=tickRows.join(""); tickPending=false; });
+}
+
+// new block => solidify live column, scroll wall left, open fresh live column
+let scrolling=false;
+function newBlock(){
+  blockCount++;
+  scrolling=true; scroll=0;
+  const start=performance.now();
+  const dur=650;
+  (function anim(t){
+    scroll=Math.min(1,(t-start)/dur);
+    if(scroll<1){ requestAnimationFrame(anim); }
+    else{
+      columns.shift();
+      columns.push(makeCol());
+      live=columns[COLS-1];
+      scroll=0; scrolling=false;
+    }
+  })(start);
+}
+
+// ---- live connection (blockchain.info) ---------------------
+const statusEl=document.getElementById("status");
+const statusLbl=statusEl.querySelector(".lbl");
+let ws=null, wsOK=false, simTimer=null, simBlockTimer=null;
+
+function setStatus(live,text){ statusEl.classList.toggle("live",live); statusLbl.textContent=text; }
+
+function fetchPrice(){
+  fetch("https://blockchain.info/ticker")
+    .then(r=>r.json())
+    .then(j=>{ if(j&&j.USD&&j.USD.last){ PRICE=j.USD.last; } })
+    .catch(()=>{});
+}
+
+function connect(){
+  try{ ws=new WebSocket("wss://ws.blockchain.info/inv"); }
+  catch(e){ startSim(); return; }
+
+  ws.onopen=()=>{
+    wsOK=true; stopSim();
+    setStatus(true,"LIVE · blockchain.info");
+    ws.send('{"op":"unconfirmed_sub"}');
+    ws.send('{"op":"blocks_sub"}');
+  };
+  ws.onmessage=ev=>{
+    let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
+    if(m.op==="utx" && m.x){
+      const x=m.x;
+      let sat=0; if(Array.isArray(x.out)) for(const o of x.out) sat+=(o.value||0);
+      const btc=sat/1e8;
+      const outAddr = x.out&&x.out[0]?x.out[0].addr:null;
+      const inAddr = x.inputs&&x.inputs[0]&&x.inputs[0].prev_out?x.inputs[0].prev_out.addr:null;
+      if(btc>0) landTx(btc, outAddr, inAddr);
+    } else if(m.op==="block"){
+      newBlock();
+    }
+  };
+  ws.onclose=()=>{ wsOK=false; setStatus(false,"SIMULATED (reconnecting)"); startSim(); scheduleReconnect(); };
+  ws.onerror=()=>{ try{ws.close();}catch(_){} };
+}
+let reconnectT=null;
+function scheduleReconnect(){ clearTimeout(reconnectT); reconnectT=setTimeout(connect,8000); }
+
+// ---- simulation fallback -----------------------------------
+function simTx(){
+  // lognormal-ish value distribution
+  const roll=Math.random();
+  let btc;
+  if(roll>0.985) btc=200+Math.random()*3000;      // whale
+  else if(roll>0.90) btc=1+Math.random()*40;
+  else if(roll>0.55) btc=0.05+Math.random()*2;
+  else btc=0.0005+Math.random()*0.08;
+  const a=()=>"1"+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,6);
+  landTx(btc, a(), a());
+}
+function startSim(){
+  if(simTimer) return;
+  setStatus(false,"SIMULATED");
+  simTimer=setInterval(()=>{ const n=1+Math.floor(Math.random()*3); for(let i=0;i<n;i++) simTx(); }, 220);
+  simBlockTimer=setInterval(()=>{ if(!scrolling) newBlock(); }, 16000);
+}
+function stopSim(){ clearInterval(simTimer); clearInterval(simBlockTimer); simTimer=simBlockTimer=null; }
+
+// ---- seed the wall with plausible history ------------------
+(function seed(){
+  for(let c=0;c<COLS-1;c++){
+    const density=0.10+0.35*(c/COLS);           // recent columns busier
+    for(let r=0;r<ROWS;r++){
+      if(Math.random()<density){
+        const roll=Math.random();
+        let usd;
+        if(roll>0.97) usd=5e6*Math.pow(10,Math.random()*2.3);
+        else if(roll>0.8) usd=1e4*Math.pow(10,Math.random()*2);
+        else usd=10*Math.pow(10,Math.random()*3);
+        columns[c][r].usd=usd;
+      }
+    }
+  }
+})();
+
+// ---- main loop ---------------------------------------------
+function loop(){ draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+// ---- boot ---------------------------------------------------
+setStatus(false,"CONNECTING…");
+fetchPrice();
+setInterval(fetchPrice, 60000);
+connect();
+// if no open within 6s, run simulation so the wall is never empty
+setTimeout(()=>{ if(!wsOK) startSim(); }, 6000);
+</script>
+</body>
+</html>
