@@ -40,7 +40,11 @@
   #status .lbl { color:#9fb0c4; }
   #sig { position:fixed; right:20px; bottom:14px; font-size:10px; color:#3a4658;
     font-family:"Consolas",monospace; user-select:none; }
-  #hint { position:fixed; right:20px; top:40px; font-size:10px; color:#4a5a70; }
+  #height { position:fixed; right:20px; top:42px; font-size:11px; color:#9fb0c4;
+    font-family:"Consolas",monospace; letter-spacing:.4px; user-select:none; }
+  #height .lbl { color:var(--dim); margin-right:5px; }
+  #height .v { color:#dfe6ea; font-variant-numeric:tabular-nums; }
+  #hint { position:fixed; right:20px; top:62px; font-size:10px; color:#4a5a70; }
 </style>
 </head>
 <body>
@@ -53,6 +57,7 @@
 </div>
 
 <div id="status"><span class="dot"></span><span class="lbl">CONNECTING…</span></div>
+<div id="height"><span class="lbl">height</span><span id="heightVal" class="v">—</span></div>
 <div id="hint">block time: real blocks scroll the wall</div>
 
 <div id="ticker">
@@ -85,16 +90,18 @@ const tickRows = [];                 // recent tx text
 let txCount = 0, blockCount = 0;
 
 // ---- color ramp (USD, log scale) ---------------------------
+// order matches the reference legend: dark green (smallest) up through
+// blue, gray, tan/orange, to red (largest).
 const STOPS = [
-  [10,        [ 10, 24, 60]],
-  [100,       [ 18, 52,122]],
-  [1000,      [ 31, 95,208]],
-  [10000,     [ 74,144,226]],
-  [100000,    [150,178,200]],
-  [1000000,   [223,230,234]],
-  [10000000,  [240,160, 48]],
-  [100000000, [240, 96, 16]],
-  [1000000000,[224, 24, 16]],
+  [10,        [ 38,108, 56]],   // 0.001 BTC / $10        — dark green
+  [100,       [150,212,120]],   // 0.01  BTC / $100       — light green
+  [1000,      [ 40, 92,206]],   // 0.1   BTC / $1,000     — blue
+  [10000,     [148,196,232]],   // 1     BTC / $10,000    — light blue
+  [100000,    [122,126,132]],   // 10    BTC / $100,000   — medium gray
+  [1000000,   [206,209,213]],   // 100   BTC / $1 Million — near-white gray
+  [10000000,  [228,188,128]],   // 1,000 BTC / $10 Million — tan
+  [100000000, [226,124, 46]],   // 10,000 BTC / $100 Million — orange
+  [1000000000,[206, 42, 34]],   // 100,000 BTC / $1 Billion — red
 ];
 function ramp(usd){
   if(usd<=STOPS[0][0]) return STOPS[0][1];
@@ -203,6 +210,18 @@ function draw(){
     }
   }
 
+  // ---- new-block flash on the solidifying front column ----
+  if(blockFlash>0.01){
+    const c=COLS-2;
+    const xL=colX(c), xR=colX(c+1);
+    const yt=cellY(c,0), yb=cellY(c,ROWS);
+    ctx.save();
+    ctx.fillStyle=`rgba(99,240,138,${0.16*blockFlash})`;
+    ctx.fillRect(xL-6, yt-10, (xR-xL)+12, (yb-yt)+20);
+    ctx.restore();
+    blockFlash*=0.955;
+  }
+
   // ---- green coin-age flow lines ----
   for(let i=flows.length-1;i>=0;i--){
     const f=flows[i];
@@ -216,7 +235,14 @@ function draw(){
     ctx.shadowBlur=0;
     // node dots
     ctx.fillStyle=`rgba(160,255,190,${f.a})`;
+    ctx.beginPath(); ctx.arc(x1,y1,2.6,0,7); ctx.fill();
     ctx.beginPath(); ctx.arc(x2,y2,2.6,0,7); ctx.fill();
+    // dollar-value tag at the destination end
+    if(f.tag){
+      ctx.font="600 11px 'Segoe UI'"; ctx.textAlign="left"; ctx.textBaseline="middle";
+      ctx.fillStyle=`rgba(150,255,180,${f.a})`;
+      ctx.fillText(f.tag, x2+34, y2);
+    }
     f.a*=0.965;
     if(f.a<0.03) flows.splice(i,1);
   }
@@ -224,13 +250,27 @@ function draw(){
   drawLabels(off);
 }
 
+const ADDR_CHARS = "123456789abcdefghijklmnopqrstuvwxyz".split("");
 function drawLabels(off){
   ctx.save();
   ctx.textBaseline="middle";
+
+  // right-edge address labels, one per row of the front column
+  const rc = COLS-1+off;
+  ctx.font = "10px 'Consolas','Courier New',monospace";
+  ctx.textAlign = "left";
+  const lx = colX(rc)+10;
+  for(let r=0;r<ROWS;r++){
+    const yMid = (cellY(rc,r)+cellY(rc,r+1))/2;
+    ctx.fillStyle = "#5a6a80";
+    const ch = ADDR_CHARS[r] || ADDR_CHARS[ADDR_CHARS.length-1];
+    ctx.fillText("…"+ch, lx, yMid);
+  }
+
   // Address Space (right, following front column top->bottom)
   ctx.fillStyle="#6d7f95"; ctx.font="600 13px 'Segoe UI'";
   const axc=COLS-1.6+off;
-  const ax = colX(axc)+22;
+  const ax = colX(axc)+58;
   ctx.save();
   ctx.translate(ax, VPy);
   ctx.rotate(-0.14);
@@ -278,7 +318,10 @@ function landTx(btc, addrOut, addrIn){
   if(Math.random()<0.5 && usd>50){
     const c1 = Math.floor((hashStr((addrIn||"x")+txCount)%COLS)*0.85); // older column
     const r1 = hashStr((addrIn||"y")+r) % ROWS;
-    flows.push({c1, r1, c2:COLS-1, r2:r, a:1});
+    const tagVal = Math.round(usd);
+    const flow = {c1, r1, c2:COLS-1, r2:r, a:1};
+    if(tagVal>=1 && tagVal<=999) flow.tag = "$"+tagVal;
+    flows.push(flow);
     if(flows.length>14) flows.shift();
   }
 
@@ -301,10 +344,11 @@ function renderTicker(){
 }
 
 // new block => solidify live column, scroll wall left, open fresh live column
-let scrolling=false;
-function newBlock(){
-  blockCount++;
-  scrolling=true; scroll=0;
+let scrolling=false, pendingBlocks=0;
+function newBlock(real){
+  if(scrolling){ if(real) pendingBlocks++; return; }
+  scrolling=true; scroll=0; blockCount++;
+  if(real) blockFlash=1;
   const start=performance.now();
   const dur=650;
   (function anim(t){
@@ -315,52 +359,106 @@ function newBlock(){
       columns.push(makeCol());
       live=columns[COLS-1];
       scroll=0; scrolling=false;
+      if(pendingBlocks>0){ pendingBlocks--; newBlock(true); }
     }
   })(start);
 }
 
-// ---- live connection (blockchain.info) ---------------------
+// ---- live data (polling blockchain.info mempool + mempool.space blocks) ---
 const statusEl=document.getElementById("status");
 const statusLbl=statusEl.querySelector(".lbl");
-let ws=null, wsOK=false, simTimer=null, simBlockTimer=null;
+const heightVal=document.getElementById("heightVal");
+let simTimer=null, simBlockTimer=null;
+let liveNow=false, everLive=false;
+let lastTxOK=0, lastBlkOK=0;
+let tipHeight=0;
+const seenTx=new Set();
+const landQueue=[];
+let txTimer=null, blkTimer=null;
+let blockFlash=0;
 
 function setStatus(live,text){ statusEl.classList.toggle("live",live); statusLbl.textContent=text; }
 
 function fetchPrice(){
-  fetch("https://blockchain.info/ticker")
+  fetch("https://mempool.space/api/v1/prices")
     .then(r=>r.json())
-    .then(j=>{ if(j&&j.USD&&j.USD.last){ PRICE=j.USD.last; } })
+    .then(j=>{ if(j&&j.USD){ PRICE=j.USD; } })
     .catch(()=>{});
 }
 
-function connect(){
-  try{ ws=new WebSocket("wss://ws.blockchain.info/inv"); }
-  catch(e){ startSim(); return; }
-
-  ws.onopen=()=>{
-    wsOK=true; stopSim();
-    setStatus(true,"LIVE · blockchain.info");
-    ws.send('{"op":"unconfirmed_sub"}');
-    ws.send('{"op":"blocks_sub"}');
-  };
-  ws.onmessage=ev=>{
-    let m; try{ m=JSON.parse(ev.data); }catch(_){ return; }
-    if(m.op==="utx" && m.x){
-      const x=m.x;
-      let sat=0; if(Array.isArray(x.out)) for(const o of x.out) sat+=(o.value||0);
-      const btc=sat/1e8;
-      const outAddr = x.out&&x.out[0]?x.out[0].addr:null;
-      const inAddr = x.inputs&&x.inputs[0]&&x.inputs[0].prev_out?x.inputs[0].prev_out.addr:null;
-      if(btc>0) landTx(btc, outAddr, inAddr);
-    } else if(m.op==="block"){
-      newBlock();
-    }
-  };
-  ws.onclose=()=>{ wsOK=false; setStatus(false,"SIMULATED (reconnecting)"); startSim(); scheduleReconnect(); };
-  ws.onerror=()=>{ try{ws.close();}catch(_){} };
+function goLive(){
+  const was=liveNow; liveNow=true; everLive=true;
+  if(!was){ stopSim(); setStatus(true,"LIVE · mempool.space"); }
 }
-let reconnectT=null;
-function scheduleReconnect(){ clearTimeout(reconnectT); reconnectT=setTimeout(connect,8000); }
+function goSim(reason){
+  if(!liveNow) return;
+  liveNow=false; setStatus(false, reason||"SIMULATED"); startSim();
+}
+
+// ---- transactions: blockchain.info unconfirmed feed (includes addresses) --
+const TX_POLL_MS=1500, BLK_POLL_MS=11000;
+function pollTxs(){
+  fetch("https://blockchain.info/unconfirmed-transactions?format=json&cors=true")
+    .then(r=>r.json())
+    .then(j=>{
+      lastTxOK=performance.now(); goLive();
+      const arr=j&&j.txs?j.txs:[];
+      const fresh=[];
+      for(const t of arr){
+        if(seenTx.has(t.hash)) continue;
+        seenTx.add(t.hash);
+        let sat=0, outAddr=null, inAddr=null;
+        if(Array.isArray(t.out)){ for(const o of t.out) sat+=(o.value||0); if(t.out[0]) outAddr=t.out[0].addr; }
+        if(Array.isArray(t.inputs)){ const pi=t.inputs[0]&&t.inputs[0].prev_out; if(pi) inAddr=pi.addr; }
+        if(sat>0) fresh.push({btc:sat/1e8, outAddr, inAddr});
+      }
+      if(seenTx.size>4000){ const it=seenTx.values(); for(let i=0;i<2000;i++) seenTx.delete(it.next().value); }
+      scheduleLanding(fresh);
+    })
+    .catch(()=>{});
+}
+
+// spread a polled burst across the interval so the wall reads as a live trickle
+function scheduleLanding(fresh){
+  if(!fresh.length) return;
+  const now=performance.now();
+  const span=Math.max(700, TX_POLL_MS*0.9);
+  for(let i=0;i<fresh.length;i++){
+    landQueue.push({tx:fresh[i], due: now + (i/fresh.length)*span + Math.random()*50});
+  }
+  if(landQueue.length>240) landQueue.splice(0, landQueue.length-240);
+}
+function drainQueue(){
+  const now=performance.now();
+  for(let i=landQueue.length-1;i>=0;i--){
+    if(landQueue[i].due<=now){ const t=landQueue[i].tx; landTx(t.btc,t.outAddr,t.inAddr); landQueue.splice(i,1); }
+  }
+}
+
+// ---- blocks: mempool.space tip tracker (real ~10-min cadence) -----------
+function pollBlocks(){
+  fetch("https://mempool.space/api/v1/blocks")
+    .then(r=>r.json())
+    .then(arr=>{
+      lastBlkOK=performance.now(); goLive();
+      if(!Array.isArray(arr)||!arr.length) return;
+      const h=arr[0].height;
+      if(heightVal) heightVal.textContent="#"+h.toLocaleString();
+      if(tipHeight===0){ tipHeight=h; }            // initial sync — no scroll
+      else if(h>tipHeight){
+        pendingBlocks += Math.min(h-tipHeight,6) - 1;
+        tipHeight=h;
+        newBlock(true);
+      }
+    })
+    .catch(()=>{});
+}
+
+function startPolling(){
+  pollTxs(); pollBlocks();
+  if(!txTimer) txTimer=setInterval(pollTxs, TX_POLL_MS);
+  if(!blkTimer) blkTimer=setInterval(pollBlocks, BLK_POLL_MS);
+}
 
 // ---- simulation fallback -----------------------------------
 function simTx(){
@@ -400,16 +498,21 @@ function stopSim(){ clearInterval(simTimer); clearInterval(simBlockTimer); simTi
 })();
 
 // ---- main loop ---------------------------------------------
-function loop(){ draw(); requestAnimationFrame(loop); }
+function loop(){ drainQueue(); draw(); requestAnimationFrame(loop); }
 requestAnimationFrame(loop);
 
 // ---- boot ---------------------------------------------------
 setStatus(false,"CONNECTING…");
 fetchPrice();
 setInterval(fetchPrice, 60000);
-connect();
-// if no open within 6s, run simulation so the wall is never empty
-setTimeout(()=>{ if(!wsOK) startSim(); }, 6000);
+startPolling();
+// if neither feed responds within 6s, run simulation so the wall is never empty
+setTimeout(()=>{ if(!everLive){ startSim(); setStatus(false,"SIMULATED (no feed)"); } }, 6000);
+// staleness watchdog: if both feeds go quiet, fall back to sim but keep polling
+setInterval(()=>{
+  const now=performance.now();
+  if(everLive && (now-lastTxOK)>25000 && (now-lastBlkOK)>45000) goSim("SIMULATED (feed stale)");
+}, 8000);
 </script>
 </body>
 </html>
