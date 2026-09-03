@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Bitcoin Blockchain — Realtime 3D Visualization</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root {
+    --bg: #05070c;
+    --fg: #d2deec;
+    --dim: #5c6e86;
+    --dim-alt: #435166;
+    --accent-green: #52f28b;
+    --panel-bg: rgba(6, 10, 16, 0.82);
+    --panel-border: rgba(90, 120, 160, 0.2);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* 3D WebGL Canvas */
+  #webgl-container {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+  }
+
+  /* 2D Overlay canvas for perspective labels & typography */
+  #overlay-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* HUD Overlays */
+  .hud-panel {
+    position: fixed;
+    z-index: 10;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  /* Legend (top-left) */
+  #legend {
+    left: 24px;
+    top: 24px;
+    font-size: 11px;
+    line-height: 1.2;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  #legend table { border-collapse: separate; border-spacing: 0 2px; }
+  #legend th {
+    font-family: 'Inter', sans-serif;
+    font-size: 10px;
+    letter-spacing: 0.8px;
+    color: var(--dim);
+    text-align: right;
+    padding: 0 8px 4px 0;
+    font-weight: 600;
+  }
+  #legend td {
+    padding: 1px 7px 1px 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  #legend .btc { color: #8fa0b5; text-align: right; font-weight: 500; }
+  #legend .usd { color: #cfdbe8; text-align: right; padding-right: 9px; font-weight: 600; }
+  #legend .sw {
+    width: 13px;
+    height: 13px;
+    display: inline-block;
+    vertical-align: -2px;
+    border-radius: 2px;
+    box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  }
+
+  /* Ticker (bottom-left) */
+  #ticker {
+    left: 24px;
+    bottom: 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #9fb0c4;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+    max-width: 650px;
+  }
+  #ticker h4 {
+    font-family: 'Inter', sans-serif;
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 6px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  #tickrows {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .tick-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    white-space: nowrap;
+    opacity: 0.95;
+    transition: opacity 0.3s ease;
+  }
+  .tick-row .in-addr { color: #52f28b; }
+  .tick-row .date { color: #7288a3; }
+  .tick-row .arr { color: #44566c; }
+  .tick-row .out-addr { color: #dfe7ef; }
+  .tick-row .val { color: #f6fcff; font-weight: 700; margin-left: auto; padding-left: 12px; }
+
+  /* Top Right Status & Controls */
+  #top-right {
+    right: 24px;
+    top: 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  #status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    padding: 6px 12px;
+    border-radius: 20px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  #status-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e0992a;
+    box-shadow: 0 0 10px #e0992a;
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  #status-pill.live .dot {
+    background: #33f080;
+    box-shadow: 0 0 12px #33f080;
+  }
+  #status-pill.sim .dot {
+    background: #4facfe;
+    box-shadow: 0 0 10px #4facfe;
+  }
+  #status-text {
+    color: #cad8e6;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+  }
+  #block-info {
+    color: var(--dim);
+    font-size: 11px;
+    display: flex;
+    gap: 10px;
+  }
+  #block-info .val { color: #eaf1f8; font-weight: 600; }
+
+  /* Controls Hint & Actions */
+  #controls-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .hud-btn {
+    background: rgba(20, 28, 40, 0.75);
+    border: 1px solid rgba(120, 150, 190, 0.25);
+    color: #92a4ba;
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .hud-btn:hover {
+    background: rgba(35, 50, 72, 0.95);
+    color: #eaf1f8;
+    border-color: rgba(140, 180, 230, 0.5);
+  }
+
+  /* Bottom Right Signature */
+  #sig {
+    right: 24px;
+    bottom: 20px;
+    font-size: 10px;
+    color: #3b4756;
+    font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.4px;
+  }
+  #sig a { color: inherit; text-decoration: none; }
+  #sig a:hover { color: #586b82; }
+
+  /* Tooltip for 3D block inspection */
+  #tooltip {
+    position: fixed;
+    z-index: 100;
+    background: rgba(8, 14, 22, 0.94);
+    border: 1px solid rgba(82, 242, 139, 0.4);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.85), 0 0 15px rgba(82, 242, 139, 0.2);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: #e2ecf5;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -120%);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    white-space: nowrap;
+    backdrop-filter: blur(12px);
+  }
+  #tooltip.visible { opacity: 1; }
+  #tooltip .tt-title {
+    font-family: 'Inter', sans-serif;
+    font-size: 10px;
+    color: #52f28b;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 4px;
+    font-weight: 700;
+  }
+  #tooltip .tt-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    line-height: 1.4;
+  }
+  #tooltip .tt-label { color: #6d8098; }
+  #tooltip .tt-val { color: #ffffff; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div id="webgl-container"></div>
+<canvas id="overlay-canvas"></canvas>
+
+<!-- Top Left Legend -->
+<div id="legend" class="hud-panel">
+  <table>
+    <thead>
+      <tr>
+        <th class="btc">BTC</th>
+        <th class="usd">USD</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="legend-body"></tbody>
+  </table>
+</div>
+
+<!-- Top Right Status -->
+<div id="top-right" class="hud-panel">
+  <div id="status-pill">
+    <span class="dot"></span>
+    <span id="status-text">CONNECTING…</span>
+  </div>
+  <div id="block-info">
+    <span>HEIGHT <span id="height-val" class="val">—</span></span>
+    <span>BTC/USD <span id="price-val" class="val">$65,000</span></span>
+  </div>
+  <div id="controls-bar">
+    <button class="hud-btn" id="btn-reset-view" title="Reset to original signature view">Reset View</button>
+    <button class="hud-btn" id="btn-toggle-sim" title="Toggle simulation mode">Mode: Auto</button>
+    <button class="hud-btn" id="btn-audio" title="Toggle audio sound blips">Audio: Off</button>
+  </div>
+</div>
+
+<!-- Bottom Left Ticker -->
+<div id="ticker" class="hud-panel">
+  <h4>New transactions:</h4>
+  <div id="tickrows"></div>
+</div>
+
+<!-- Bottom Right Signature -->
+<div id="sig">
+  rebuilt homage to <a href="https://visualblockchain.org" target="_blank" rel="noopener">visualblockchain.org</a> · steve@visualblockchain.org
+</div>
+
+<!-- Hover Tooltip -->
+<div id="tooltip">
+  <div class="tt-title" id="tt-title">Block Details</div>
+  <div class="tt-row"><span class="tt-label">Block Time:</span><span class="tt-val" id="tt-time">—</span></div>
+  <div class="tt-row"><span class="tt-label">Address Bin:</span><span class="tt-val" id="tt-addr">—</span></div>
+  <div class="tt-row"><span class="tt-label">Volume USD:</span><span class="tt-val" id="tt-usd">—</span></div>
+  <div class="tt-row"><span class="tt-label">Volume BTC:</span><span class="tt-val" id="tt-btc">—</span></div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   The Bitcoin Blockchain — Realtime 3D Wall
+   An authentic 3D WebGL homage to visualblockchain.org
+   ============================================================ */
+
+// ---- Configuration & Dimensions -----------------------------
+const COLS = 60;        // Time columns (from 2009 -> Just Now)
+const ROWS = 32;        // Address space bins (Base58 address characters)
+let   BTC_PRICE = 65000;
+
+// Bitcoin Address base58 characters for vertical bins (...1 to ...z)
+const ADDR_SYMBOLS = [
+  "1", "2", "3", "4", "5", "6", "7", "8", "9",
+  "a", "b", "c", "d", "e", "f", "g", "h", "i",
+  "j", "k", "m", "n", "o", "p", "q", "r", "s",
+  "t", "u", "v", "w", "x"
+];
+
+// Timeline markers (non-linear logarithmic progression)
+const TIMELINE_MARKS = [
+  { t: 0.00, label: "2009" },
+  { t: 0.12, label: "3 years ago" },
+  { t: 0.28, label: "Last year" },
+  { t: 0.43, label: "6 months ago" },
+  { t: 0.58, label: "Last month" },
+  { t: 0.70, label: "Last week" },
+  { t: 0.81, label: "3 days ago" },
+  { t: 0.89, label: "12 hours ago" },
+  { t: 0.95, label: "an hour ago" },
+  { t: 1.00, label: "Just now" }
+];
+
+// USD Logarithmic color ramp matching original visualblockchain.org
+const STOPS = [
+  [10,         [ 38, 108,  56]], // 0.001 BTC / $10        — dark green
+  [100,        [150, 212, 120]], // 0.01  BTC / $100       — light green
+  [1000,       [ 40,  92, 206]], // 0.1   BTC / $1,000     — blue
+  [10000,      [148, 196, 232]], // 1     BTC / $10,000    — light blue
+  [100000,     [122, 126, 132]], // 10    BTC / $100,000   — medium gray
+  [1000000,    [206, 209, 213]], // 100   BTC / $1 Million — near-white gray
+  [10000000,   [228, 188, 128]], // 1,000 BTC / $10M      — tan
+  [100000000,  [226, 124,  46]], // 10,000 BTC / $100M     — orange
+  [1000000000, [206,  42,  34]]  // 100,000 BTC / $1B      — red
+];
+
+function getRampRgb(usd) {
+  if (usd <= 0) return [54, 58, 65]; // solid visible slate tile (no black holes)
+  if (usd <= STOPS[0][0]) return STOPS[0][1];
+  const L = Math.log10(usd);
+  for (let i = 0; i < STOPS.length - 1; i++) {
+    const a = STOPS[i], b = STOPS[i + 1];
+    const la = Math.log10(a[0]), lb = Math.log10(b[0]);
+    if (L <= lb) {
+      const f = (L - la) / (lb - la);
+      return [
+        Math.round(a[1][0] + (b[1][0] - a[1][0]) * f),
+        Math.round(a[1][1] + (b[1][1] - a[1][1]) * f),
+        Math.round(a[1][2] + (b[1][2] - a[1][2]) * f)
+      ];
+    }
+  }
+  return STOPS[STOPS.length - 1][1];
+}
+
+function getThreeColor(usd, c, r) {
+  if (usd <= 0) {
+    // Solid, visible slate tile variation — eliminates any black hole appearance
+    const base = 52 + ((c + r) % 3) * 6 + ((c * 7 + r * 11) % 6);
+    return new THREE.Color(base / 255, (base + 4) / 255, (base + 9) / 255);
+  }
+  const rgb = getRampRgb(usd);
+  return new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+}
+
+// Build the HTML Legend table
+(function buildLegend() {
+  const tbody = document.getElementById("legend-body");
+  const legendData = [
+    ["100,000", "$1 Billion", 1e9],
+    ["10,000",  "$100 Million", 1e8],
+    ["1,000",   "$10 Million", 1e7],
+    ["100",     "$1 Million", 1e6],
+    ["10",      "$100,000", 1e5],
+    ["1",       "$10,000", 1e4],
+    ["0.1",     "$1,000", 1e3],
+    ["0.01",    "$100", 1e2],
+    ["0.001",   "$10", 1e1]
+  ];
+  legendData.forEach(([btc, usd, val]) => {
+    const rgb = getRampRgb(val);
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td class="btc">${btc}</td>
+      <td class="usd">${usd}</td>
+      <td><span class="sw" style="background: rgb(${rgb[0]},${rgb[1]},${rgb[2]});"></span></td>
+    `;
+    tbody.appendChild(row);
+  });
+})();
+
+// ---- WebGL & Three.js Scene Setup ---------------------------
+const container = document.getElementById("webgl-container");
+const overlayCanvas = document.getElementById("overlay-canvas");
+const ctxOverlay = overlayCanvas.getContext("2d");
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x04060a, 0.007);
+
+const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 0.1, 500);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance" });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.16;
+container.appendChild(renderer.domElement);
+
+// ---- Lights -------------------------------------------------
+const ambientLight = new THREE.AmbientLight(0x243042, 1.35);
+scene.add(ambientLight);
+
+// Key Directional Light (positioned to light both top and right faces of extruded cubes)
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.3);
+dirLight.position.set(36, 30, 48);
+scene.add(dirLight);
+
+// Backlight (cool soft blue along receding left edge)
+const rimLight = new THREE.DirectionalLight(0x406590, 1.15);
+rimLight.position.set(-45, 12, 15);
+scene.add(rimLight);
+
+// Front-column dynamic neon glow light
+const frontAccentLight = new THREE.PointLight(0x52f28b, 2.6, 50);
+frontAccentLight.position.set(24, 0, 10);
+scene.add(frontAccentLight);
+
+// ---- 3D Geometry Layout Math --------------------------------
+// The 3D wall spans from X_LEFT (-44) to X_RIGHT (+20)
+const X_LEFT = -44.0;
+const X_RIGHT = 20.0;
+const WALL_SPAN_X = X_RIGHT - X_LEFT;
+const WALL_HEIGHT = 26.0;
+const CELL_HEIGHT = WALL_HEIGHT / ROWS;
+const WALL_BASE_DEPTH = 0.55;
+
+// Non-linear column distribution (exponential compression toward vanishing point at 2009)
+const POW_EXP = 1.76;
+function colFrac(c) {
+  return Math.pow(Math.max(0, Math.min(1, c / (COLS - 1))), POW_EXP);
+}
+function colX(c) {
+  return X_LEFT + WALL_SPAN_X * colFrac(c);
+}
+function colWidth(c) {
+  const c1 = Math.min(COLS - 1, c + 1);
+  const c0 = Math.max(0, c);
+  if (c === COLS - 1) {
+    return (colX(COLS - 1) - colX(COLS - 2)) * 1.08;
+  }
+  return Math.max(0.22, colX(c1) - colX(c0));
+}
+function rowY(r) {
+  return (ROWS / 2 - r - 0.5) * CELL_HEIGHT;
+}
+
+// ---- Data State ---------------------------------------------
+function makeEmptyCol() {
+  return Array.from({ length: ROWS }, () => ({ usd: 0, txs: 0, hot: 0 }));
+}
+const wallData = Array.from({ length: COLS }, makeEmptyCol);
+
+// ---- 3D Historical Wall (InstancedMesh) ----------------------
+const histColsCount = COLS - 1;
+const histInstancesTotal = histColsCount * ROWS;
+
+const unitBoxGeom = new THREE.BoxGeometry(1, 1, 1);
+const histMaterial = new THREE.MeshStandardMaterial({
+  roughness: 0.35,
+  metalness: 0.18,
+  flatShading: false
+});
+
+const histInstancedMesh = new THREE.InstancedMesh(unitBoxGeom, histMaterial, histInstancesTotal);
+histInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(histInstancedMesh);
+
+const dummyObj = new THREE.Object3D();
+
+function updateHistInstance(c, r) {
+  if (c >= COLS - 1) return;
+  const idx = c * ROWS + r;
+  const w = colWidth(c) * 0.93;
+  const h = CELL_HEIGHT * 0.93;
+  const d = WALL_BASE_DEPTH;
+  const x = colX(c) + w / 2;
+  const y = rowY(r);
+  const z = d / 2;
+
+  dummyObj.position.set(x, y, z);
+  dummyObj.scale.set(w, h, d);
+  dummyObj.updateMatrix();
+  histInstancedMesh.setMatrixAt(idx, dummyObj.matrix);
+
+  const cell = wallData[c][r];
+  const color = getThreeColor(cell.usd, c, r);
+  histInstancedMesh.setColorAt(idx, color);
+}
+
+function rebuildHistoricalWall() {
+  for (let c = 0; c < histColsCount; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      updateHistInstance(c, r);
+    }
+  }
+  histInstancedMesh.instanceMatrix.needsUpdate = true;
+  if (histInstancedMesh.instanceColor) histInstancedMesh.instanceColor.needsUpdate = true;
+  histMaterial.needsUpdate = true;
+}
+
+// ---- 3D Front Active Column (Extruded 3D Voxels) -------------
+const frontBlocks = [];
+const frontGroup = new THREE.Group();
+scene.add(frontGroup);
+
+const cFront = COLS - 1;
+const frontW = colWidth(cFront) * 0.96;
+const frontH = CELL_HEIGHT * 0.96;
+
+for (let r = 0; r < ROWS; r++) {
+  const geom = new THREE.BoxGeometry(frontW, frontH, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x363c46,
+    roughness: 0.28,
+    metalness: 0.18,
+    emissive: 0x000000,
+    emissiveIntensity: 0
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+
+  const x = colX(cFront) + frontW / 2;
+  const y = rowY(r);
+  mesh.position.set(x, y, 0.6);
+
+  // Crisp white wireframe border for authentic voxel look
+  const edges = new THREE.EdgesGeometry(geom);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.0,
+    blending: THREE.AdditiveBlending,
+    linewidth: 1.5
+  });
+  const wire = new THREE.LineSegments(edges, lineMat);
+  mesh.add(wire);
+
+  frontBlocks.push({
+    mesh,
+    mat,
+    wire,
+    lineMat,
+    row: r,
+    targetDepth: 1.1,
+    currentDepth: 1.1,
+    glow: 0.0,
+    activeTime: 0
+  });
+
+  frontGroup.add(mesh);
+}
+
+function updateFrontBlock(r) {
+  const block = frontBlocks[r];
+  const cell = wallData[cFront][r];
+
+  if (cell.usd > 0) {
+    const baseColor = getThreeColor(cell.usd, cFront, r);
+    block.mat.color.copy(baseColor);
+    block.mat.emissive.copy(baseColor);
+    block.mat.emissiveIntensity = 0.25;
+    // Extrusion depth proportional to USD volume
+    const volBoost = Math.min(2.8, Math.log10(Math.max(10, cell.usd)) * 0.48);
+    block.targetDepth = 1.2 + volBoost;
+  } else {
+    // Solid visible slate block - never pitch black or hole-like
+    block.mat.color.setRGB(54 / 255, 60 / 255, 70 / 255);
+    block.mat.emissive.setRGB(0, 0, 0);
+    block.mat.emissiveIntensity = 0;
+    block.targetDepth = 1.0;
+  }
+}
+
+// ---- Dynamic 3D Coin-Age Lasers & Traveling Photons ---------
+const activeLasers = [];
+const laserGroup = new THREE.Group();
+scene.add(laserGroup);
+
+// Laser origin UTXO highlight boxes on historical wall (white border + green glow)
+const originMarkers = [];
+const markerGroup = new THREE.Group();
+scene.add(markerGroup);
+
+function createOriginMarker(c, r) {
+  const w = colWidth(c) * 1.08;
+  const h = CELL_HEIGHT * 1.08;
+  const d = WALL_BASE_DEPTH * 1.2;
+  const geom = new THREE.BoxGeometry(w, h, d);
+  const edges = new THREE.EdgesGeometry(geom);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 1.0,
+    blending: THREE.AdditiveBlending
+  });
+  const wireMesh = new THREE.LineSegments(edges, lineMat);
+
+  // Translucent green fill
+  const boxMat = new THREE.MeshBasicMaterial({
+    color: 0x52f28b,
+    transparent: true,
+    opacity: 0.65,
+    blending: THREE.AdditiveBlending
+  });
+  const fillMesh = new THREE.Mesh(geom, boxMat);
+
+  const group = new THREE.Group();
+  group.add(wireMesh);
+  group.add(fillMesh);
+
+  const x = colX(c) + w / 2;
+  const y = rowY(r);
+  group.position.set(x, y, d / 2 + 0.05);
+
+  markerGroup.add(group);
+  originMarkers.push({ group, wireMesh, fillMesh, lineMat, boxMat, geom, edges, life: 1.0 });
+}
+
+function triggerCoinAgeLaser(c1, r1, r2, btc, usd) {
+  const c2 = COLS - 1;
+  const p1 = new THREE.Vector3(
+    colX(c1) + colWidth(c1) / 2,
+    rowY(r1),
+    WALL_BASE_DEPTH + 0.1
+  );
+  const p2 = new THREE.Vector3(
+    colX(c2) + frontW / 2,
+    rowY(r2),
+    frontBlocks[r2].currentDepth + 0.2
+  );
+
+  // True 3D curved trajectory arching forward into +Z space toward viewer
+  const dist = p1.distanceTo(p2);
+  const midX = (p1.x + p2.x) * 0.5;
+  const midY = Math.max(p1.y, p2.y) + 1.4 + dist * 0.04;
+  const midZ = 4.0 + dist * 0.09; // Arches forward in 3D!
+
+  const pMid = new THREE.Vector3(midX, midY, midZ);
+  const curve = new THREE.QuadraticBezierCurve3(p1, pMid, p2);
+
+  // Outer glowing green laser beam
+  const tubeGeom = new THREE.TubeGeometry(curve, 32, 0.09, 6, false);
+  const tubeMat = new THREE.MeshBasicMaterial({
+    color: 0x66ffa0,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending
+  });
+  const tubeMesh = new THREE.Mesh(tubeGeom, tubeMat);
+  laserGroup.add(tubeMesh);
+
+  // Core bright white laser beam
+  const coreGeom = new THREE.TubeGeometry(curve, 32, 0.04, 6, false);
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.95,
+    blending: THREE.AdditiveBlending
+  });
+  const coreMesh = new THREE.Mesh(coreGeom, coreMat);
+  laserGroup.add(coreMesh);
+
+  // Traveling photon particle
+  const photonGeom = new THREE.SphereGeometry(0.3, 12, 12);
+  const photonMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    blending: THREE.AdditiveBlending
+  });
+  const photonMesh = new THREE.Mesh(photonGeom, photonMat);
+  laserGroup.add(photonMesh);
+
+  // Origin UTXO highlight marker
+  createOriginMarker(c1, r1);
+
+  // Dollar tag at destination
+  let tagText = "";
+  if (usd >= 1 && usd < 1000) tagText = "$" + Math.round(usd);
+  else if (usd >= 1000 && usd < 1000000) tagText = "$" + (usd / 1000).toFixed(1) + "k";
+  else if (usd >= 1000000) tagText = "$" + (usd / 1000000).toFixed(1) + "M";
+
+  activeLasers.push({
+    tubeMesh,
+    tubeGeom,
+    tubeMat,
+    coreMesh,
+    coreGeom,
+    coreMat,
+    photonMesh,
+    photonGeom,
+    photonMat,
+    curve,
+    r2,
+    tagText,
+    progress: 0.0,
+    speed: 1.6 + Math.random() * 0.6,
+    life: 1.0
+  });
+
+  playBlip(usd);
+}
+
+// ---- Floating Dollar Tags List ------------------------------
+const floatingDollarTags = [];
+function addFloatingTag(x3, y3, z3, text) {
+  if (!text) return;
+  const tag = {
+    pos: new THREE.Vector3(x3 + 1.2, y3, z3),
+    text,
+    alpha: 1.0,
+    vy: 0.008 + Math.random() * 0.008,
+    vx: 0.015
+  };
+  floatingDollarTags.push(tag);
+  if (floatingDollarTags.length > 24) floatingDollarTags.shift();
+}
+
+// ---- Camera & Perspective Alignment -------------------------
+// Signature visualblockchain vantage point:
+// Camera focused on the active right edge where blocks are solidifying,
+// with ample breathing room for extruded 3D cubes, address characters, and floating tags
+const DEFAULT_CAM_POS = new THREE.Vector3(20.0, 3.0, 52.0);
+const DEFAULT_LOOK_AT = new THREE.Vector3(-1.5, 0.0, 0.0);
+const DEFAULT_OFFSET = new THREE.Vector3().subVectors(DEFAULT_CAM_POS, DEFAULT_LOOK_AT);
+const BASE_DISTANCE = DEFAULT_OFFSET.length();
+
+camera.position.copy(DEFAULT_CAM_POS);
+camera.lookAt(DEFAULT_LOOK_AT);
+
+// Interactive Parallax & Orbit Controller
+let mouseX = 0, mouseY = 0;
+let targetCamX = DEFAULT_CAM_POS.x;
+let targetCamY = DEFAULT_CAM_POS.y;
+let targetCamZ = DEFAULT_CAM_POS.z;
+let isDragging = false;
+let prevMouseX = 0, prevMouseY = 0;
+let camYaw = 0, camPitch = 0;
+let camDistance = BASE_DISTANCE;
+
+window.addEventListener("mousemove", (e) => {
+  const normX = (e.clientX / window.innerWidth) * 2 - 1;
+  const normY = -(e.clientY / window.innerHeight) * 2 + 1;
+  mouseX = normX;
+  mouseY = normY;
+
+  if (isDragging) {
+    const dx = e.clientX - prevMouseX;
+    const dy = e.clientY - prevMouseY;
+    camYaw -= dx * 0.005;
+    camPitch = Math.max(-0.6, Math.min(0.6, camPitch + dy * 0.005));
+    prevMouseX = e.clientX;
+    prevMouseY = e.clientY;
+  }
+
+  handleHover(normX, normY, e.clientX, e.clientY);
+});
+
+window.addEventListener("mousedown", (e) => {
+  if (e.target.closest(".hud-panel") || e.target.closest(".hud-btn")) return;
+  isDragging = true;
+  prevMouseX = e.clientX;
+  prevMouseY = e.clientY;
+});
+
+window.addEventListener("mouseup", () => { isDragging = false; });
+
+window.addEventListener("wheel", (e) => {
+  // Allow smooth zoom in up to 18 and expansive zoom out up to 140
+  camDistance = Math.max(18, Math.min(140, camDistance + e.deltaY * 0.04));
+  e.preventDefault();
+}, { passive: false });
+
+window.addEventListener("dblclick", resetCameraView);
+document.getElementById("btn-reset-view").addEventListener("click", resetCameraView);
+
+function resetCameraView() {
+  camYaw = 0;
+  camPitch = 0;
+  camDistance = BASE_DISTANCE;
+  camera.position.copy(DEFAULT_CAM_POS);
+  camera.lookAt(DEFAULT_LOOK_AT);
+}
+
+function handleResize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+
+  const dpr = window.devicePixelRatio || 1;
+  overlayCanvas.width = Math.round(w * dpr);
+  overlayCanvas.height = Math.round(h * dpr);
+  ctxOverlay.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", handleResize);
+handleResize();
+
+// ---- Interactive Hover Raycasting ---------------------------
+const raycaster = new THREE.Raycaster();
+const mouseVec = new THREE.Vector2();
+const tooltipEl = document.getElementById("tooltip");
+const ttTime = document.getElementById("tt-time");
+const ttAddr = document.getElementById("tt-addr");
+const ttUsd = document.getElementById("tt-usd");
+const ttBtc = document.getElementById("tt-btc");
+
+function handleHover(normX, normY, clientX, clientY) {
+  mouseVec.set(normX, normY);
+  raycaster.setFromCamera(mouseVec, camera);
+
+  // Check front column blocks
+  const frontMeshes = frontBlocks.map(b => b.mesh);
+  const frontIntersects = raycaster.intersectObjects(frontMeshes);
+
+  if (frontIntersects.length > 0) {
+    const hitMesh = frontIntersects[0].object;
+    const block = frontBlocks.find(b => b.mesh === hitMesh);
+    if (block) {
+      const cell = wallData[cFront][block.row];
+      const addrChar = ADDR_SYMBOLS[block.row] || "?";
+      tooltipEl.style.left = clientX + "px";
+      tooltipEl.style.top = clientY + "px";
+      ttTime.textContent = "Current Block (Pending)";
+      ttAddr.textContent = `...${addrChar} (Bin ${block.row + 1}/${ROWS})`;
+      ttUsd.textContent = cell.usd > 0 ? "$" + cell.usd.toLocaleString(undefined, {maximumFractionDigits: 0}) : "$0";
+      ttBtc.textContent = cell.usd > 0 ? (cell.usd / BTC_PRICE).toFixed(4) + " BTC" : "0.0000 BTC";
+      tooltipEl.classList.add("visible");
+      return;
+    }
+  }
+
+  // Check historical wall instances
+  const histIntersects = raycaster.intersectObject(histInstancedMesh);
+  if (histIntersects.length > 0) {
+    const instanceId = histIntersects[0].instanceId;
+    if (instanceId !== undefined && instanceId >= 0) {
+      const c = Math.floor(instanceId / ROWS);
+      const r = instanceId % ROWS;
+      if (c < COLS - 1) {
+        const cell = wallData[c][r];
+        const addrChar = ADDR_SYMBOLS[r] || "?";
+        const frac = c / (COLS - 1);
+        let timeLabel = "Past Block";
+        for (let i = 0; i < TIMELINE_MARKS.length - 1; i++) {
+          if (frac >= TIMELINE_MARKS[i].t && frac <= TIMELINE_MARKS[i+1].t) {
+            timeLabel = `~${TIMELINE_MARKS[i].label}`;
+            break;
+          }
+        }
+        tooltipEl.style.left = clientX + "px";
+        tooltipEl.style.top = clientY + "px";
+        ttTime.textContent = `Historical Block (${timeLabel})`;
+        ttAddr.textContent = `...${addrChar} (Bin ${r + 1}/${ROWS})`;
+        ttUsd.textContent = cell.usd > 0 ? "$" + cell.usd.toLocaleString(undefined, {maximumFractionDigits: 0}) : "$0";
+        ttBtc.textContent = cell.usd > 0 ? (cell.usd / BTC_PRICE).toFixed(4) + " BTC" : "0.0000 BTC";
+        tooltipEl.classList.add("visible");
+        return;
+      }
+    }
+  }
+
+  tooltipEl.classList.remove("visible");
+}
+
+// ---- 2D Projected Perspective Typography Overlay ------------
+const projVec = new THREE.Vector3();
+function toScreen(x, y, z) {
+  projVec.set(x, y, z);
+  projVec.project(camera);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  return {
+    x: (projVec.x * 0.5 + 0.5) * w,
+    y: (-projVec.y * 0.5 + 0.5) * h,
+    visible: projVec.z < 1.0
+  };
+}
+
+function drawPerspectiveLabels() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  ctxOverlay.clearRect(0, 0, w, h);
+
+  // 1. "The Bitcoin Blockchain" title floating along top perspective edge
+  const pTitle1 = toScreen(-20, WALL_HEIGHT / 2 + 2.5, 0);
+  const pTitle2 = toScreen(8, WALL_HEIGHT / 2 + 2.5, 0);
+
+  if (pTitle1.visible && pTitle2.visible) {
+    const angle = Math.atan2(pTitle2.y - pTitle1.y, pTitle2.x - pTitle1.x);
+    ctxOverlay.save();
+    ctxOverlay.translate(pTitle1.x, pTitle1.y);
+    ctxOverlay.rotate(angle);
+    ctxOverlay.font = "700 24px 'Chakra Petch', 'Inter', sans-serif";
+    ctxOverlay.fillStyle = "rgba(225, 238, 252, 0.95)";
+    ctxOverlay.shadowColor = "rgba(0, 0, 0, 0.9)";
+    ctxOverlay.shadowBlur = 10;
+    ctxOverlay.fillText("The Bitcoin Blockchain", 0, 0);
+    ctxOverlay.restore();
+  }
+
+  // 2. "Address Space" floating vertically along right edge
+  const pAddr1 = toScreen(colX(cFront) + frontW + 2.6, WALL_HEIGHT / 2 - 2, 0);
+  const pAddr2 = toScreen(colX(cFront) + frontW + 2.6, -WALL_HEIGHT / 2 + 2, 0);
+
+  if (pAddr1.visible && pAddr2.visible) {
+    const angle = Math.atan2(pAddr2.y - pAddr1.y, pAddr2.x - pAddr1.x);
+    ctxOverlay.save();
+    const midX = (pAddr1.x + pAddr2.x) * 0.5 + 30;
+    const midY = (pAddr1.y + pAddr2.y) * 0.5;
+    ctxOverlay.translate(midX, midY);
+    ctxOverlay.rotate(angle);
+    ctxOverlay.font = "600 13px 'Inter', sans-serif";
+    ctxOverlay.fillStyle = "#8da2bc";
+    ctxOverlay.letterSpacing = "0.8px";
+    ctxOverlay.textAlign = "center";
+    ctxOverlay.fillText("Address Space", 0, 0);
+    ctxOverlay.restore();
+  }
+
+  // 3. Address Characters on the front column (...1 to ...z)
+  ctxOverlay.save();
+  ctxOverlay.font = "10px 'JetBrains Mono', monospace";
+  ctxOverlay.textAlign = "left";
+  ctxOverlay.textBaseline = "middle";
+
+  for (let r = 0; r < ROWS; r++) {
+    const block = frontBlocks[r];
+    const pt = toScreen(colX(cFront) + frontW + 0.35, rowY(r), block.currentDepth * 0.5);
+    if (!pt.visible || pt.x < 0 || pt.x > w || pt.y < 0 || pt.y > h) continue;
+
+    const char = ADDR_SYMBOLS[r] || "?";
+    if (block.glow > 0.1) {
+      ctxOverlay.fillStyle = `rgba(82, 242, 139, ${0.6 + 0.4 * block.glow})`;
+      ctxOverlay.shadowColor = "rgba(82, 242, 139, 0.9)";
+      ctxOverlay.shadowBlur = 8;
+    } else {
+      ctxOverlay.fillStyle = "#5c6e86";
+      ctxOverlay.shadowBlur = 0;
+    }
+    ctxOverlay.fillText(`…${char}`, pt.x + 6, pt.y);
+  }
+  ctxOverlay.restore();
+
+  // 4. "Block Time" along bottom perspective edge
+  const pBt1 = toScreen(-18, -WALL_HEIGHT / 2 - 3.0, 0);
+  const pBt2 = toScreen(8, -WALL_HEIGHT / 2 - 3.0, 0);
+
+  if (pBt1.visible && pBt2.visible) {
+    const angle = Math.atan2(pBt2.y - pBt1.y, pBt2.x - pBt1.x);
+    ctxOverlay.save();
+    const btMidX = (pBt1.x + pBt2.x) * 0.5;
+    const btMidY = (pBt1.y + pBt2.y) * 0.5 + 24;
+    ctxOverlay.translate(btMidX, btMidY);
+    ctxOverlay.rotate(angle);
+    ctxOverlay.font = "600 13px 'Inter', sans-serif";
+    ctxOverlay.fillStyle = "#8ea5c0";
+    ctxOverlay.letterSpacing = "0.8px";
+    ctxOverlay.textAlign = "center";
+    ctxOverlay.fillText("Block Time", 0, 0);
+    ctxOverlay.restore();
+  }
+
+  // Timeline tick marks along the base of the wall
+  ctxOverlay.save();
+  ctxOverlay.font = "10px 'Inter', sans-serif";
+  ctxOverlay.textAlign = "center";
+  ctxOverlay.fillStyle = "#637892";
+
+  for (const mark of TIMELINE_MARKS) {
+    const c = Math.round(mark.t * (COLS - 1));
+    const pt = toScreen(colX(c), -WALL_HEIGHT / 2 - 0.8, 0);
+    if (!pt.visible || pt.x < 10 || pt.x > w - 10) continue;
+
+    ctxOverlay.fillText(mark.label, pt.x, pt.y + 14);
+    ctxOverlay.strokeStyle = "rgba(99, 120, 146, 0.4)";
+    ctxOverlay.lineWidth = 1;
+    ctxOverlay.beginPath();
+    ctxOverlay.moveTo(pt.x, pt.y);
+    ctxOverlay.lineTo(pt.x, pt.y + 6);
+    ctxOverlay.stroke();
+  }
+  ctxOverlay.restore();
+
+  // 5. Floating Dollar Tags ($148, $75, etc.) in 3D right of front column
+  ctxOverlay.save();
+  ctxOverlay.font = "700 12px 'Inter', sans-serif";
+  ctxOverlay.textAlign = "left";
+  ctxOverlay.textBaseline = "middle";
+
+  for (let i = floatingDollarTags.length - 1; i >= 0; i--) {
+    const tag = floatingDollarTags[i];
+    tag.pos.y += tag.vy;
+    tag.pos.x += tag.vx;
+    tag.alpha *= 0.985;
+
+    const pt = toScreen(tag.pos.x, tag.pos.y, tag.pos.z);
+    if (pt.visible) {
+      ctxOverlay.fillStyle = `rgba(82, 242, 139, ${tag.alpha})`;
+      ctxOverlay.shadowColor = "rgba(82, 242, 139, 0.95)";
+      ctxOverlay.shadowBlur = 9;
+      ctxOverlay.fillText(tag.text, pt.x, pt.y);
+    }
+
+    if (tag.alpha < 0.04) {
+      floatingDollarTags.splice(i, 1);
+    }
+  }
+  ctxOverlay.restore();
+}
+
+// ---- Web Audio API (Futuristic Digital Blip) ----------------
+let audioCtx = null;
+let audioEnabled = false;
+document.getElementById("btn-audio").addEventListener("click", () => {
+  audioEnabled = !audioEnabled;
+  document.getElementById("btn-audio").textContent = audioEnabled ? "Audio: On" : "Audio: Off";
+  if (audioEnabled && !audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+});
+
+function playBlip(usd) {
+  if (!audioEnabled || !audioCtx) return;
+  try {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = "sine";
+    const pitch = 440 + Math.min(1200, Math.log10(Math.max(10, usd)) * 220);
+    osc.frequency.setValueAtTime(pitch, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.12);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.13);
+  } catch (e) {}
+}
+
+// ---- Data & Transaction Landing Engine ----------------------
+let txCount = 0;
+let blockCount = 0;
+const tickRows = [];
+const tickrowsEl = document.getElementById("tickrows");
+
+function hashString(str) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function shortAddr(a, endChar) {
+  if (!a) return "──────────────";
+  if (endChar) {
+    const stem = a.length > 20 ? a.slice(0, 24) : a.slice(0, 16);
+    return stem + "…" + endChar;
+  }
+  if (a.length <= 16) return a;
+  return a.slice(0, 24) + "…" + a.slice(-1);
+}
+
+function formatBtcDate(daysAgo) {
+  const d = new Date(Date.now() - daysAgo * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+function landTx(btc, outAddr, inAddr, historicalDaysAgo) {
+  const usd = btc * BTC_PRICE;
+  txCount++;
+
+  // Map outAddr to row
+  const outHash = hashString((outAddr || String(txCount)) + "");
+  const rowDest = outHash % ROWS;
+  const destChar = ADDR_SYMBOLS[rowDest];
+
+  const cell = wallData[cFront][rowDest];
+  cell.usd = Math.max(cell.usd, usd);
+  cell.txs += 1;
+  cell.hot = 1.0;
+
+  // Front block 3D pulse, spring extrusion & white wireframe flash
+  const block = frontBlocks[rowDest];
+  block.glow = 1.0;
+  block.activeTime = performance.now();
+  block.lineMat.color.setHex(0xffffff); // Flash pure white
+  block.lineMat.opacity = 1.0;
+
+  // Pop forward along Z
+  const popAmount = 1.8 + Math.min(3.2, Math.log10(Math.max(10, usd)) * 0.65);
+  block.currentDepth = Math.max(block.currentDepth, popAmount);
+  updateFrontBlock(rowDest);
+
+  // Determine historical input block (coin age)
+  let days = historicalDaysAgo;
+  if (days === undefined) {
+    const r = Math.random();
+    if (r < 0.40) days = 0.05 + Math.random() * 2;       // hours to days
+    else if (r < 0.70) days = 2 + Math.random() * 30;    // days to 1 month
+    else if (r < 0.90) days = 30 + Math.random() * 180;  // 1 to 6 months
+    else days = 180 + Math.random() * 1400;              // 6 months to 4 years!
+  }
+
+  // Non-linear column index
+  const MAX_DAYS = 365 * 10;
+  const normTime = Math.max(0, Math.min(1, 1 - Math.log10(1 + days) / Math.log10(1 + MAX_DAYS)));
+  const colSrc = Math.max(0, Math.min(COLS - 2, Math.floor(Math.pow(normTime, 1 / POW_EXP) * (COLS - 1))));
+
+  const inHash = hashString((inAddr || "in") + String(txCount));
+  const rowSrc = inHash % ROWS;
+
+  // Seed source cell in history
+  if (wallData[colSrc][rowSrc].usd === 0) {
+    wallData[colSrc][rowSrc].usd = usd * 0.9;
+    updateHistInstance(colSrc, rowSrc);
+    histInstancedMesh.instanceColor.needsUpdate = true;
+  }
+
+  // Trigger 3D glowing laser arc
+  if (Math.random() < 0.68 || usd > 80) {
+    triggerCoinAgeLaser(colSrc, rowSrc, rowDest, btc, usd);
+  }
+
+  // Floating dollar tag right of the block in 3D
+  let tagText = "";
+  if (usd >= 1 && usd < 1000) tagText = "$" + Math.round(usd);
+  else if (usd >= 1000 && usd < 1000000) tagText = "$" + (usd / 1000).toFixed(1) + "k";
+  else if (usd >= 1000000) tagText = "$" + (usd / 1000000).toFixed(1) + "M";
+
+  if (tagText) {
+    addFloatingTag(colX(cFront) + frontW + 0.6, rowY(rowDest), block.currentDepth * 0.8, tagText);
+  }
+
+  // Ticker row formatting matching visualblockchain.org
+  const dateStr = formatBtcDate(days);
+  const rowHtml = `
+    <div class="tick-row">
+      <span class="in-addr">${shortAddr(inAddr, ADDR_SYMBOLS[rowSrc])}</span>
+      <span class="date">${dateStr}</span>
+      <span class="arr">-&gt;</span>
+      <span class="out-addr">${shortAddr(outAddr, destChar)}</span>
+      <span class="val">${btc < 0.01 ? btc.toFixed(4) : btc.toFixed(3)} BTC</span>
+    </div>
+  `;
+  tickRows.unshift(rowHtml);
+  if (tickRows.length > 5) tickRows.pop();
+  tickrowsEl.innerHTML = tickRows.join("");
+}
+
+// ---- Block Scrolling (New Bitcoin Block Solidification) ----
+let isScrolling = false;
+let blockFlash = 0;
+
+function advanceBlock(real) {
+  if (isScrolling) return;
+  isScrolling = true;
+  blockCount++;
+  blockFlash = 1.0;
+
+  // Shift column data left toward the past
+  for (let c = 0; c < COLS - 1; c++) {
+    wallData[c] = wallData[c + 1];
+  }
+  wallData[cFront] = makeEmptyCol();
+
+  // Rebuild 3D historical wall
+  rebuildHistoricalWall();
+
+  // Reset front blocks
+  for (let r = 0; r < ROWS; r++) {
+    updateFrontBlock(r);
+  }
+
+  // Grand flash on front accent light
+  frontAccentLight.intensity = 6.0;
+
+  setTimeout(() => {
+    isScrolling = false;
+  }, 400);
+}
+
+// ---- Live Feeds & WebSocket ---------------------------------
+const statusPill = document.getElementById("status-pill");
+const statusText = document.getElementById("status-text");
+const heightVal = document.getElementById("height-val");
+const priceVal = document.getElementById("price-val");
+let isLive = false;
+let simInterval = null;
+let autoMode = true;
+
+function setModePill(mode, label) {
+  statusPill.className = "";
+  if (mode === "live") {
+    statusPill.classList.add("live");
+  } else {
+    statusPill.classList.add("sim");
+  }
+  statusText.textContent = label;
+}
+
+// Fetch BTC/USD price
+function fetchPrice() {
+  fetch("https://mempool.space/api/v1/prices")
+    .then(r => r.json())
+    .then(data => {
+      if (data && data.USD) {
+        BTC_PRICE = data.USD;
+        priceVal.textContent = "$" + BTC_PRICE.toLocaleString();
+      }
+    })
+    .catch(() => {});
+}
+fetchPrice();
+setInterval(fetchPrice, 60000);
+
+// WebSocket connection to blockchain.info live mempool
+let ws = null;
+let wsHeartbeat = null;
+
+function connectWebSocket() {
+  try {
+    ws = new WebSocket("wss://ws.blockchain.info/inv");
+
+    ws.onopen = () => {
+      setModePill("live", "LIVE · blockchain.info");
+      isLive = true;
+      ws.send(JSON.stringify({ op: "unconfirmed_sub" }));
+      ws.send(JSON.stringify({ op: "blocks_sub" }));
+
+      if (wsHeartbeat) clearInterval(wsHeartbeat);
+      wsHeartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ op: "ping" }));
+        }
+      }, 30000);
+    };
+
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.op === "utx") {
+          const tx = msg.x;
+          let totalSat = 0;
+          let outAddr = null;
+          let inAddr = null;
+
+          if (Array.isArray(tx.out)) {
+            for (const o of tx.out) totalSat += (o.value || 0);
+            if (tx.out[0]) outAddr = tx.out[0].addr;
+          }
+          if (Array.isArray(tx.inputs) && tx.inputs[0] && tx.inputs[0].prev_out) {
+            inAddr = tx.inputs[0].prev_out.addr;
+          }
+
+          if (totalSat > 0) {
+            const btc = totalSat / 1e8;
+            landTx(btc, outAddr, inAddr);
+          }
+        } else if (msg.op === "block") {
+          if (msg.x && msg.x.height) {
+            heightVal.textContent = "#" + msg.x.height.toLocaleString();
+          }
+          advanceBlock(true);
+        }
+      } catch (err) {}
+    };
+
+    ws.onerror = () => {
+      if (autoMode) startSimulation();
+    };
+
+    ws.onclose = () => {
+      if (autoMode) startSimulation();
+      setTimeout(connectWebSocket, 8000);
+    };
+  } catch (e) {
+    if (autoMode) startSimulation();
+  }
+}
+
+// Fetch block tip from mempool.space
+function pollTipHeight() {
+  fetch("https://mempool.space/api/v1/blocks")
+    .then(r => r.json())
+    .then(blocks => {
+      if (Array.isArray(blocks) && blocks.length > 0) {
+        const h = blocks[0].height;
+        heightVal.textContent = "#" + h.toLocaleString();
+      }
+    })
+    .catch(() => {});
+}
+pollTipHeight();
+setInterval(pollTipHeight, 30000);
+
+// ---- Simulation Engine (Fallback & Instant Active) -----------
+function randomBase58(len) {
+  let s = "1";
+  for (let i = 1; i < len; i++) {
+    s += ADDR_SYMBOLS[Math.floor(Math.random() * ADDR_SYMBOLS.length)];
+  }
+  return s;
+}
+
+function simTx() {
+  const roll = Math.random();
+  let btc;
+  if (roll > 0.985) btc = 50 + Math.random() * 800;       // Whales ($3M - $50M)
+  else if (roll > 0.88) btc = 2 + Math.random() * 40;     // Large ($130k - $2.6M)
+  else if (roll > 0.50) btc = 0.05 + Math.random() * 1.5; // Medium ($3k - $100k)
+  else btc = 0.0003 + Math.random() * 0.04;               // Small ($20 - $2.5k)
+
+  const inAddr = randomBase58(34);
+  const outAddr = randomBase58(34);
+  landTx(btc, outAddr, inAddr);
+}
+
+function startSimulation() {
+  if (simInterval) return;
+  setModePill("sim", "SIMULATED");
+  simInterval = setInterval(() => {
+    const burst = 1 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < burst; i++) simTx();
+  }, 320);
+}
+
+function stopSimulation() {
+  if (simInterval) {
+    clearInterval(simInterval);
+    simInterval = null;
+  }
+}
+
+document.getElementById("btn-toggle-sim").addEventListener("click", () => {
+  if (simInterval) {
+    stopSimulation();
+    setModePill("live", "WS CONNECTING…");
+    document.getElementById("btn-toggle-sim").textContent = "Mode: Live";
+  } else {
+    startSimulation();
+    document.getElementById("btn-toggle-sim").textContent = "Mode: Sim";
+  }
+});
+
+// Periodic simulated block advance
+setInterval(() => {
+  if (simInterval && Math.random() < 0.3) {
+    advanceBlock(false);
+  }
+}, 25000);
+
+// ---- Seed Historical Wall Data ------------------------------
+(function seedHistory() {
+  for (let c = 0; c < COLS - 1; c++) {
+    const density = 0.15 + 0.40 * (c / COLS);
+    for (let r = 0; r < ROWS; r++) {
+      if (Math.random() < density) {
+        const roll = Math.random();
+        let usd;
+        if (roll > 0.98) usd = 5e6 * Math.pow(10, Math.random() * 2.2);
+        else if (roll > 0.82) usd = 2e4 * Math.pow(10, Math.random() * 2);
+        else usd = 20 * Math.pow(10, Math.random() * 3);
+        wallData[c][r].usd = usd;
+        wallData[c][r].txs = 1 + Math.floor(Math.random() * 12);
+      }
+    }
+  }
+  rebuildHistoricalWall();
+})();
+
+// Start network
+connectWebSocket();
+setTimeout(() => {
+  if (!isLive) {
+    startSimulation();
+  }
+}, 3500);
+
+// ---- Animation & Render Loop --------------------------------
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  const now = performance.now();
+
+  // 1. Camera Parallax, Orbit & Zoom Smoothing
+  if (!isDragging) {
+    const distScale = camDistance / BASE_DISTANCE;
+    const swayX = Math.sin(now * 0.0006) * 0.5;
+    const swayY = Math.cos(now * 0.0008) * 0.3;
+    targetCamX = DEFAULT_LOOK_AT.x + DEFAULT_OFFSET.x * distScale + (mouseX * 2.4) + swayX;
+    targetCamY = DEFAULT_LOOK_AT.y + DEFAULT_OFFSET.y * distScale + (mouseY * 1.8) + swayY;
+    targetCamZ = DEFAULT_LOOK_AT.z + DEFAULT_OFFSET.z * distScale;
+
+    camera.position.x += (targetCamX - camera.position.x) * 0.05;
+    camera.position.y += (targetCamY - camera.position.y) * 0.05;
+    camera.position.z += (targetCamZ - camera.position.z) * 0.05;
+    camera.lookAt(DEFAULT_LOOK_AT);
+  } else {
+    const cosPitch = Math.cos(camPitch);
+    camera.position.x = DEFAULT_LOOK_AT.x + camDistance * Math.sin(camYaw) * cosPitch;
+    camera.position.y = DEFAULT_LOOK_AT.y + camDistance * Math.sin(camPitch);
+    camera.position.z = DEFAULT_LOOK_AT.z + camDistance * Math.cos(camYaw) * cosPitch;
+    camera.lookAt(DEFAULT_LOOK_AT);
+  }
+
+  // 2. Animate Front Extruded Voxels
+  frontAccentLight.intensity += (2.4 - frontAccentLight.intensity) * 0.05;
+
+  for (let r = 0; r < ROWS; r++) {
+    const block = frontBlocks[r];
+
+    // Smooth spring ease toward target extrusion depth
+    block.currentDepth += (block.targetDepth - block.currentDepth) * 0.12;
+    block.mesh.scale.z = block.currentDepth;
+    block.mesh.position.z = block.currentDepth / 2;
+
+    // Wireframe fadeout and Cyberpunk Emissive Glow
+    if (block.glow > 0.01) {
+      block.glow *= 0.93;
+      block.lineMat.opacity = 0.95 * block.glow;
+      block.mat.emissive.copy(block.mat.color).multiplyScalar(0.4 + 0.8 * block.glow);
+      block.mat.emissiveIntensity = 0.35 + 1.8 * block.glow;
+    } else {
+      block.glow = 0;
+      block.lineMat.opacity = 0;
+      if (wallData[cFront][r].usd > 0) {
+        block.mat.emissive.copy(block.mat.color);
+        block.mat.emissiveIntensity = 0.35;
+      } else {
+        block.mat.emissive.setRGB(0, 0, 0);
+        block.mat.emissiveIntensity = 0;
+      }
+    }
+  }
+
+  // 3. Animate 3D Lasers & Traveling Photons
+  for (let i = activeLasers.length - 1; i >= 0; i--) {
+    const laser = activeLasers[i];
+    laser.progress += delta * laser.speed;
+
+    if (laser.progress <= 1.0) {
+      const pos = laser.curve.getPointAt(laser.progress);
+      laser.photonMesh.position.copy(pos);
+      laser.photonMesh.visible = true;
+    } else {
+      laser.photonMesh.visible = false;
+      laser.life *= 0.92;
+      laser.tubeMat.opacity = 0.85 * laser.life;
+      laser.coreMat.opacity = 0.95 * laser.life;
+
+      if (laser.life < 0.03) {
+        laserGroup.remove(laser.tubeMesh);
+        laserGroup.remove(laser.coreMesh);
+        laserGroup.remove(laser.photonMesh);
+        laser.tubeGeom.dispose();
+        laser.tubeMat.dispose();
+        laser.coreGeom.dispose();
+        laser.coreMat.dispose();
+        laser.photonGeom.dispose();
+        laser.photonMat.dispose();
+        activeLasers.splice(i, 1);
+      }
+    }
+  }
+
+  // 4. Animate Origin UTXO Markers
+  for (let i = originMarkers.length - 1; i >= 0; i--) {
+    const m = originMarkers[i];
+    m.life *= 0.94;
+    m.lineMat.opacity = m.life;
+    m.boxMat.opacity = 0.65 * m.life;
+    m.group.scale.multiplyScalar(1.008);
+    if (m.life < 0.03) {
+      markerGroup.remove(m.group);
+      m.geom.dispose();
+      m.edges.dispose();
+      m.lineMat.dispose();
+      m.boxMat.dispose();
+      originMarkers.splice(i, 1);
+    }
+  }
+
+  // 5. Render Three.js Scene
+  renderer.render(scene, camera);
+
+  // 6. Draw 2D Perspective Projection Overlay (Labels & Floating Dollar Tags)
+  drawPerspectiveLabels();
+}
+
+requestAnimationFrame(animate);
+</script>
+</body>
+</html>
